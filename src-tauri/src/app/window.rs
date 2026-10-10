@@ -1074,18 +1074,15 @@ fn setup_autohide_titlebar(parent_window: &WebviewWindow) -> tauri::Result<()> {
     }
     let overlay_url = Url::parse(&encoded).expect("data URL must be valid");
 
-    let titlebar = WebviewWindowBuilder::new(
-        &app,
-        "titlebar-overlay",
-        WebviewUrl::External(overlay_url),
-    )
-    .decorations(false)
-    .always_on_top(true)
-    .resizable(false)
-    .visible(false)
-    .skip_taskbar(true)
-    .inner_size(800.0, 36.0)
-    .build()?;
+    let titlebar =
+        WebviewWindowBuilder::new(&app, "titlebar-overlay", WebviewUrl::External(overlay_url))
+            .decorations(false)
+            .always_on_top(true)
+            .resizable(false)
+            .visible(false)
+            .skip_taskbar(true)
+            .inner_size(800.0, 36.0)
+            .build()?;
 
     let titlebar_clone = titlebar.clone();
     let parent_clone = parent.clone();
