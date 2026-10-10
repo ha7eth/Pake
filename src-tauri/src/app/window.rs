@@ -711,10 +711,14 @@ fn build_window(
     {
         window_builder = window_builder.data_directory(_data_dir).theme(theme);
 
-        if window_config.hide_window_decorations {
-            window_builder = window_builder.decorations(false);
-        }
-
+#[cfg(target_os = "windows")]
+{
+    window_builder = window_builder.decorations(false);
+}
+#[cfg(not(target_os = "windows"))]
+if window_config.hide_window_decorations {
+    window_builder = window_builder.decorations(false);
+}
         if !config.proxy_url.is_empty() {
             if let Ok(proxy_url) = Url::from_str(&config.proxy_url) {
                 parsed_proxy_url = Some(proxy_url.clone());
@@ -835,6 +839,13 @@ fn build_window(
     window_builder = window_builder.on_navigation(|_| true);
 
     let window = window_builder.build()?;
+
+    #[cfg(target_os = "windows")]
+    if label == "pake" {
+        if let Err(error) = setup_autohide_titlebar(&window) {
+            eprintln!("[Pake] Failed to setup autohide titlebar: {error}");
+        }
+    }
 
     #[cfg(target_os = "windows")]
     {
@@ -964,4 +975,169 @@ mod proxy_arg_tests {
         // for http/socks5 today.
         assert!(build_proxy_browser_arg(&parse("https://proxy.local:8443")).is_none());
     }
+}
+#[cfg(target_os = "windows")]
+fn setup_autohide_titlebar(parent_window: &WebviewWindow) -> tauri::Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use tauri::{PhysicalPosition, PhysicalSize, Position, Size};
+    use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetCursorPos, GetWindowRect, IsWindowVisible,
+    };
+
+    let app = parent_window.app_handle().clone();
+    let parent = parent_window.clone();
+
+    // Локальный HTML для панели: черный фон, нативный вид кнопок, плавный выезд
+    let titlebar_html = r#"
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <style>
+                * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+                html, body {
+                    width: 100%;
+                    height: 100%;
+                    overflow: hidden;
+                }
+                body {
+                    background-color: #0c0c0c;
+                    color: #cccccc;
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    font-family: "Segoe UI", Tahoma, sans-serif;
+                    border-bottom: 1px solid #1f1f1f;
+                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+                }
+                .drag-region {
+                    flex-grow: 1;
+                    height: 100%;
+                    display: flex;
+                    align-items: center;
+                    padding-left: 14px;
+                    font-size: 12px;
+                    letter-spacing: 0.3px;
+                }
+                .controls {
+                    display: flex;
+                    height: 100%;
+                    z-index: 10;
+                }
+                .btn {
+                    width: 46px;
+                    height: 100%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    cursor: pointer;
+                    background: transparent;
+                    border: none;
+                    color: #d1d1d1;
+                    font-size: 10px;
+                    transition: background 0.15s ease, color 0.15s ease;
+                }
+                .btn:hover {
+                    background-color: #2b2b2b;
+                    color: #ffffff;
+                }
+                .btn.close:hover {
+                    background-color: #e81123;
+                    color: #ffffff;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="drag-region" data-tauri-drag-region></div>
+            <div class="controls">
+                <button class="btn" title="Hide" onclick="window.__TAURI__.window.Window.getByLabel('pake').then(w => w.minimize())">&#x2014;</button>
+                <button class="btn" title="Maximize" onclick="window.__TAURI__.window.Window.getByLabel('pake').then(w => w.toggleMaximize())">&#x2610;</button>
+                <button class="btn close" title="Close" onclick="window.__TAURI__.window.Window.getByLabel('pake').then(w => w.close())">&#x2715;</button>
+            </div>
+        </body>
+        </html>
+    "#;
+
+    // Создаем отдельное окно оверлея поверх всего
+    let titlebar = WebviewWindowBuilder::new(
+        &app,
+        "titlebar-overlay",
+        WebviewUrl::Html(titlebar_html.to_string()),
+    )
+    .decorations(false)
+    .always_on_top(true)
+    .resizable(false)
+    .visible(false)
+    .skip_taskbar(true)
+    .inner_size(800.0, 36.0)
+    .build()?;
+
+    let titlebar_clone = titlebar.clone();
+    let parent_clone = parent.clone();
+    let is_visible = Arc::new(AtomicBool::new(false));
+
+    // Отслеживаем координаты мыши относительно границ окна
+    std::thread::spawn(move || {
+        let trigger_zone_height = 8; // Высота зоны у верхней кромки (в пикселях)
+        let bar_height = 36;         // Высота title bar
+
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+
+            let Ok(parent_hwnd) = parent_clone.hwnd() else { continue };
+            let hwnd = parent_hwnd.0 as HWND;
+
+            unsafe {
+                if IsWindowVisible(hwnd) == 0 {
+                    if is_visible.load(Ordering::Relaxed) {
+                        let _ = titlebar_clone.hide();
+                        is_visible.store(false, Ordering::Relaxed);
+                    }
+                    continue;
+                }
+
+                let mut rect: RECT = std::mem::zeroed();
+                if GetWindowRect(hwnd, &mut rect) == 0 {
+                    continue;
+                }
+
+                let mut cursor: POINT = std::mem::zeroed();
+                if GetCursorPos(&mut cursor) == 0 {
+                    continue;
+                }
+
+                let in_horizontal = cursor.x >= rect.left && cursor.x <= rect.right;
+                let win_w = (rect.right - rect.left) as u32;
+
+                let currently_shown = is_visible.load(Ordering::Relaxed);
+
+                if !currently_shown {
+                    // Мышь подошла к верхней кромке родительского окна
+                    if in_horizontal && cursor.y >= rect.top && cursor.y <= (rect.top + trigger_zone_height) {
+                        let _ = titlebar_clone.set_size(Size::Physical(PhysicalSize {
+                            width: win_w,
+                            height: bar_height as u32,
+                        }));
+                        let _ = titlebar_clone.set_position(Position::Physical(PhysicalPosition {
+                            x: rect.left,
+                            y: rect.top,
+                        }));
+                        let _ = titlebar_clone.show();
+                        is_visible.store(true, Ordering::Relaxed);
+                    }
+                } else {
+                    // Бар скрывается, только когда мышь покинула его границы
+                    let in_bar_area = in_horizontal && cursor.y >= rect.top && cursor.y <= (rect.top + bar_height);
+                    if !in_bar_area {
+                        let _ = titlebar_clone.hide();
+                        is_visible.store(false, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+    });
+
+    Ok(())
 }
