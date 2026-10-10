@@ -711,14 +711,15 @@ fn build_window(
     {
         window_builder = window_builder.data_directory(_data_dir).theme(theme);
 
-#[cfg(target_os = "windows")]
-{
-    window_builder = window_builder.decorations(false);
-}
-#[cfg(not(target_os = "windows"))]
-if window_config.hide_window_decorations {
-    window_builder = window_builder.decorations(false);
-}
+        #[cfg(target_os = "windows")]
+        {
+            window_builder = window_builder.decorations(false);
+        }
+        #[cfg(not(target_os = "windows"))]
+        if window_config.hide_window_decorations {
+            window_builder = window_builder.decorations(false);
+        }
+
         if !config.proxy_url.is_empty() {
             if let Ok(proxy_url) = Url::from_str(&config.proxy_url) {
                 parsed_proxy_url = Some(proxy_url.clone());
@@ -976,8 +977,10 @@ mod proxy_arg_tests {
         assert!(build_proxy_browser_arg(&parse("https://proxy.local:8443")).is_none());
     }
 }
+
 #[cfg(target_os = "windows")]
 fn setup_autohide_titlebar(parent_window: &WebviewWindow) -> tauri::Result<()> {
+    use std::fmt::Write;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use tauri::{PhysicalPosition, PhysicalSize, Position, Size};
@@ -989,7 +992,6 @@ fn setup_autohide_titlebar(parent_window: &WebviewWindow) -> tauri::Result<()> {
     let app = parent_window.app_handle().clone();
     let parent = parent_window.clone();
 
-    // Локальный HTML для панели: черный фон, нативный вид кнопок, плавный выезд
     let titlebar_html = r#"
         <!DOCTYPE html>
         <html>
@@ -1060,11 +1062,23 @@ fn setup_autohide_titlebar(parent_window: &WebviewWindow) -> tauri::Result<()> {
         </html>
     "#;
 
-    // Создаем отдельное окно оверлея поверх всего
+    let mut encoded = String::from("data:text/html;charset=utf-8,");
+    for b in titlebar_html.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(b as char)
+            }
+            _ => {
+                let _ = write!(encoded, "%{:02X}", b);
+            }
+        }
+    }
+    let overlay_url = Url::parse(&encoded).expect("data URL must be valid");
+
     let titlebar = WebviewWindowBuilder::new(
         &app,
         "titlebar-overlay",
-        WebviewUrl::Html(titlebar_html.to_string()),
+        WebviewUrl::External(overlay_url),
     )
     .decorations(false)
     .always_on_top(true)
@@ -1078,15 +1092,16 @@ fn setup_autohide_titlebar(parent_window: &WebviewWindow) -> tauri::Result<()> {
     let parent_clone = parent.clone();
     let is_visible = Arc::new(AtomicBool::new(false));
 
-    // Отслеживаем координаты мыши относительно границ окна
     std::thread::spawn(move || {
-        let trigger_zone_height = 8; // Высота зоны у верхней кромки (в пикселях)
-        let bar_height = 36;         // Высота title bar
+        let trigger_zone_height = 8;
+        let bar_height = 36;
 
         loop {
             std::thread::sleep(std::time::Duration::from_millis(50));
 
-            let Ok(parent_hwnd) = parent_clone.hwnd() else { continue };
+            let Ok(parent_hwnd) = parent_clone.hwnd() else {
+                continue;
+            };
             let hwnd = parent_hwnd.0 as HWND;
 
             unsafe {
@@ -1114,8 +1129,10 @@ fn setup_autohide_titlebar(parent_window: &WebviewWindow) -> tauri::Result<()> {
                 let currently_shown = is_visible.load(Ordering::Relaxed);
 
                 if !currently_shown {
-                    // Мышь подошла к верхней кромке родительского окна
-                    if in_horizontal && cursor.y >= rect.top && cursor.y <= (rect.top + trigger_zone_height) {
+                    if in_horizontal
+                        && cursor.y >= rect.top
+                        && cursor.y <= (rect.top + trigger_zone_height)
+                    {
                         let _ = titlebar_clone.set_size(Size::Physical(PhysicalSize {
                             width: win_w,
                             height: bar_height as u32,
@@ -1128,8 +1145,9 @@ fn setup_autohide_titlebar(parent_window: &WebviewWindow) -> tauri::Result<()> {
                         is_visible.store(true, Ordering::Relaxed);
                     }
                 } else {
-                    // Бар скрывается, только когда мышь покинула его границы
-                    let in_bar_area = in_horizontal && cursor.y >= rect.top && cursor.y <= (rect.top + bar_height);
+                    let in_bar_area = in_horizontal
+                        && cursor.y >= rect.top
+                        && cursor.y <= (rect.top + bar_height);
                     if !in_bar_area {
                         let _ = titlebar_clone.hide();
                         is_visible.store(false, Ordering::Relaxed);
