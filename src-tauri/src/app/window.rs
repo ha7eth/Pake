@@ -719,7 +719,6 @@ fn build_window(
         if window_config.hide_window_decorations {
             window_builder = window_builder.decorations(false);
         }
-
         if !config.proxy_url.is_empty() {
             if let Ok(proxy_url) = Url::from_str(&config.proxy_url) {
                 parsed_proxy_url = Some(proxy_url.clone());
