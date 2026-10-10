@@ -984,8 +984,8 @@ fn setup_autohide_titlebar(parent_window: &WebviewWindow) -> tauri::Result<()> {
     use std::sync::Arc;
     use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetCursorPos, GetWindowRect, IsWindowVisible, SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE,
-        SWP_SHOWWINDOW, SWP_HIDEWINDOW,
+        GetCursorPos, GetWindowRect, IsWindowVisible, SetWindowPos, HWND_TOPMOST, SWP_HIDEWINDOW,
+        SWP_NOACTIVATE, SWP_SHOWWINDOW,
     };
 
     let app = parent_window.app_handle().clone();
@@ -1090,7 +1090,7 @@ fn setup_autohide_titlebar(parent_window: &WebviewWindow) -> tauri::Result<()> {
 
     std::thread::spawn(move || {
         let trigger_zone_height = 12; // Сделаем зону чувствительности 12px
-        let bar_height = 36;          // Высота оверлея
+        let bar_height = 36; // Высота оверлея
 
         loop {
             std::thread::sleep(std::time::Duration::from_millis(40));
@@ -1108,7 +1108,15 @@ fn setup_autohide_titlebar(parent_window: &WebviewWindow) -> tauri::Result<()> {
             unsafe {
                 if IsWindowVisible(hwnd) == 0 {
                     if is_visible.load(Ordering::Relaxed) {
-                        SetWindowPos(bar_hwnd, std::ptr::null_mut(), 0, 0, 0, 0, SWP_HIDEWINDOW | SWP_NOACTIVATE);
+                        SetWindowPos(
+                            bar_hwnd,
+                            std::ptr::null_mut(),
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_HIDEWINDOW | SWP_NOACTIVATE,
+                        );
                         is_visible.store(false, Ordering::Relaxed);
                     }
                     continue;
@@ -1135,7 +1143,10 @@ fn setup_autohide_titlebar(parent_window: &WebviewWindow) -> tauri::Result<()> {
 
                 if !currently_shown {
                     // Подведение курсора к верхнему краю экрана/окна
-                    if in_horizontal && cursor.y >= win_top && cursor.y <= (win_top + trigger_zone_height) {
+                    if in_horizontal
+                        && cursor.y >= win_top
+                        && cursor.y <= (win_top + trigger_zone_height)
+                    {
                         SetWindowPos(
                             bar_hwnd,
                             HWND_TOPMOST,
@@ -1150,7 +1161,8 @@ fn setup_autohide_titlebar(parent_window: &WebviewWindow) -> tauri::Result<()> {
                     }
                 } else {
                     // Проверяем, находится ли курсор внутри плашки
-                    let in_bar_area = in_horizontal && cursor.y >= win_top && cursor.y <= (win_top + bar_height);
+                    let in_bar_area =
+                        in_horizontal && cursor.y >= win_top && cursor.y <= (win_top + bar_height);
                     if !in_bar_area {
                         SetWindowPos(
                             bar_hwnd,
